@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(start:*)",
+      "Bash(git --version)",
+      "Bash(gh --version)",
+      "Bash(gh auth:*)",
+      "Bash(gh repo:*)",
+      "Bash(pip show:*)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''breakout.py'', doraise=True\\)\")",
+      "Bash(where cmake:*)",
+      "Bash(cmake --version)",
+      "Bash(where vcpkg:*)",
+      "Bash(where g++)",
+      "Bash(where cl:*)",
+      "Bash(where mingw32-make:*)",
+      "Bash(where make:*)",
+      "Bash(g++ --version)",
+      "WebFetch(domain:github.com)",
+      "Bash(powershell -Command \"Invoke-RestMethod 'https://api.github.com/repos/libsdl-org/SDL/releases' | Where-Object { $_.tag_name -like 'release-2.*' } | Select-Object -First 1 -ExpandProperty tag_name\")",
+      "Bash(powershell -Command \"\\(Invoke-RestMethod 'https://api.github.com/repos/libsdl-org/SDL/releases'\\) | Where-Object { $_.tag_name -like 'release-2.*' } | Select-Object -First 1 | Select-Object -ExpandProperty tag_name\")",
+      "Bash(python:*)",
+      "Bash(ls \"C:\\\\Users\\\\Nick\\\\Desktop\\\\ClaudeCode\\\\breakout-cpp\\\\libs\\\\SDL2-2.32.10\\\\x86_64-w64-mingw32\\\\include\\\\SDL2\"\" | head -5:*)",
+      "Bash(SDL2=\"C:/Users/Nick/Desktop/ClaudeCode/breakout-cpp/libs/SDL2-2.32.10/x86_64-w64-mingw32\")",
+      "Bash(SDL2TTF=\"C:/Users/Nick/Desktop/ClaudeCode/breakout-cpp/libs/SDL2_ttf-2.24.0/x86_64-w64-mingw32\")",
+      "Bash(OUT=\"C:/Users/Nick/Desktop/ClaudeCode/breakout-cpp\")",
+      "Bash(SRC=\"$OUT/src\")",
+      "Bash(__NEW_LINE_c10f71cc32ab0524__ g++ -std=c++17 -O2 -I\"$SDL2/include\" -I\"$SDL2TTF/include\" \"$SRC/main.cpp\" \"$SRC/Game.cpp\" \"$SRC/Ball.cpp\" \"$SRC/Paddle.cpp\" \"$SRC/Block.cpp\" \"$SRC/Powerup.cpp\" \"$SRC/Laser.cpp\" \"$SRC/Particle.cpp\" -L\"$SDL2/lib\" -L\"$SDL2TTF/lib\" -lSDL2main -lSDL2 -lSDL2_ttf -mwindows -o \"$OUT/breakout.exe\")",
+      "Bash(__NEW_LINE_4b50a4e05c0313a6__ g++ -std=c++17 -O2 -I\"$SDL2/include\" -I\"$SDL2/include/SDL2\" -I\"$SDL2TTF/include\" -I\"$SDL2TTF/include/SDL2\" \"$SRC/main.cpp\" \"$SRC/Game.cpp\" \"$SRC/Ball.cpp\" \"$SRC/Paddle.cpp\" \"$SRC/Block.cpp\" \"$SRC/Powerup.cpp\" \"$SRC/Laser.cpp\" \"$SRC/Particle.cpp\" -L\"$SDL2/lib\" -L\"$SDL2TTF/lib\" -lSDL2main -lSDL2 -lSDL2_ttf -mwindows -o \"$OUT/breakout.exe\")",
+      "Bash(__NEW_LINE_c141a8fe699b4cea__ g++ -std=c++17 -O2 -I\"$SDL2/include\" -I\"$SDL2/include/SDL2\" -I\"$SDL2TTF/include\" -I\"$SDL2TTF/include/SDL2\" \"$SRC/main.cpp\" \"$SRC/Game.cpp\" \"$SRC/Ball.cpp\" \"$SRC/Paddle.cpp\" \"$SRC/Block.cpp\" \"$SRC/Powerup.cpp\" \"$SRC/Laser.cpp\" \"$SRC/Particle.cpp\" -L\"$SDL2/lib\" -L\"$SDL2TTF/lib\" -lSDL2main -lSDL2 -lSDL2_ttf -o \"$OUT/breakout.exe\")",
+      "Bash(__NEW_LINE_2fba2d7999525888__ g++ -std=c++17 -O2 -DSDL_MAIN_HANDLED -I\"$SDL2/include\" -I\"$SDL2/include/SDL2\" -I\"$SDL2TTF/include\" -I\"$SDL2TTF/include/SDL2\" \"$SRC/main.cpp\" \"$SRC/Game.cpp\" \"$SRC/Ball.cpp\" \"$SRC/Paddle.cpp\" \"$SRC/Block.cpp\" \"$SRC/Powerup.cpp\" \"$SRC/Laser.cpp\" \"$SRC/Particle.cpp\" -L\"$SDL2/lib\" -L\"$SDL2TTF/lib\" -lSDL2 -lSDL2_ttf -o \"$OUT/breakout.exe\")",
+      "Bash(grep -E \"\\\\.\\(exe|dll\\)$\")",
+      "Bash(find \"C:/Users/Nick/Desktop/ClaudeCode/breakout-cpp/src/\" -type f \\\\\\( -name \"*.h\" -o -name \"*.cpp\" \\\\\\) -exec wc -l {} +)",
+      "Bash(sort -k2)",
+      "Bash(cd:*)",
+      "Bash(__NEW_LINE_c3430e826626a357__ g++ -std=c++17 -O2 -DSDL_MAIN_HANDLED -I\"$SDL2/include\" -I\"$SDL2/include/SDL2\" -I\"$SDL2TTF/include\" -I\"$SDL2TTF/include/SDL2\" \"$OUT/src/breakout.cpp\" \"$OUT/src/main.cpp\" -L\"$SDL2/lib\" -L\"$SDL2TTF/lib\" -lSDL2 -lSDL2_ttf -o \"$OUT/breakout.exe\")",
+      "Bash(find . -type f -name .*)",
+      "Bash(git mv:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}
