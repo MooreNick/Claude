@@ -1,0 +1,977 @@
+<!DOCTYPE html> <!-- Declares this document as HTML5 -->
+<html lang="en"> <!-- Root element with English language attribute -->
+<head>
+  <meta charset="UTF-8"> <!-- Sets character encoding to UTF-8 for broad character support -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"> <!-- Makes the page responsive on mobile devices -->
+  <title>BREAKOUT</title> <!-- Browser tab title -->
+  <link rel="preconnect" href="https://fonts.googleapis.com"> <!-- Pre-connects to Google Fonts server for faster font load -->
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin> <!-- Pre-connects to Google Fonts static asset server -->
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet"> <!-- Loads the retro pixel font -->
+  <style>
+    * { /* Selects every element on the page */
+      margin: 0; /* Removes default outer spacing from all elements */
+      padding: 0; /* Removes default inner spacing from all elements */
+      box-sizing: border-box; /* Makes width/height include padding and border */
+    }
+    body { /* Styles the document body */
+      background: #000; /* Sets page background to black */
+      display: flex; /* Uses flexbox layout for centering */
+      justify-content: center; /* Centers children horizontally */
+      align-items: center; /* Centers children vertically */
+      height: 100vh; /* Makes body fill the full viewport height */
+      overflow: hidden; /* Hides any content that overflows the viewport */
+    }
+    #gameCanvas { /* Styles the game canvas element */
+      display: block; /* Removes inline spacing below the canvas */
+      image-rendering: pixelated; /* Keeps pixel art crisp when scaled */
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas> <!-- The HTML canvas element where all game graphics are drawn -->
+
+  <script>
+    // ─── CONSTANTS ───────────────────────────────────────────────────────────
+
+    const CANVAS_W = 480; // Width of the game canvas in pixels
+    const CANVAS_H = 640; // Height of the game canvas in pixels
+
+    const PADDLE_W = 80;  // Default paddle width in pixels
+    const PADDLE_H = 12;  // Paddle height in pixels
+    const PADDLE_Y = 600; // Y position of the paddle (distance from top)
+    const PADDLE_SPEED = 6; // Pixels the paddle moves per frame
+
+    const BALL_RADIUS = 7; // Radius of the ball in pixels
+    const BALL_BASE_SPEED = 4.5; // Starting speed of the ball in pixels per frame
+
+    const BLOCK_COLS = 10; // Number of block columns in the grid
+    const BLOCK_ROWS_BASE = 5; // Starting number of block rows for level 1
+    const BLOCK_ROWS_MAX = 8; // Maximum number of block rows at high levels
+    const BLOCK_W = 40; // Width of each block in pixels
+    const BLOCK_H = 18; // Height of each block in pixels
+    const BLOCK_PAD = 4; // Gap between adjacent blocks in pixels
+    const BLOCK_OFFSET_TOP = 60; // Distance from top of canvas to first block row
+    const BLOCK_OFFSET_LEFT = 20; // Distance from left of canvas to first block column
+
+    const POWERUP_CHANCE = 0.18; // Probability (0–1) that a destroyed block drops a powerup
+    const POWERUP_SPEED = 2; // Pixels per frame the powerup falls downward
+    const LASER_COOLDOWN_MS = 400; // Milliseconds between laser shots
+    const LASER_SPEED = 12; // Pixels per frame lasers travel upward
+    const WIDE_DURATION_MS = 8000; // Milliseconds the wide-paddle powerup lasts
+    const SLOW_DURATION_MS = 6000; // Milliseconds the slow-ball powerup lasts
+    const LASER_DURATION_MS = 10000; // Milliseconds the laser powerup lasts
+    const LIVES_START = 3; // Number of lives the player starts with
+
+    const NORMAL_COLORS = ['#4fc3f7','#81c784','#ffb74d','#ce93d8','#4dd0e1']; // Color palette for single-hit blocks
+    const COLOR_HP2 = '#ef9a9a'; // Color for two-hit blocks
+    const COLOR_INDESTRUCTIBLE = '#78909c'; // Color for indestructible blocks
+
+    // ─── STATE NAMES ─────────────────────────────────────────────────────────
+
+    const STATE = { // Object mapping readable names to state string identifiers
+      TITLE: 'title', // Title / main menu screen
+      PLAYING: 'playing', // Active gameplay state
+      LIFE_LOST: 'lifeLost', // Brief pause after the ball falls off the bottom
+      LEVEL_COMPLETE: 'levelComplete', // All blocks cleared; advancing to next level
+      GAME_OVER: 'gameOver', // Player has no lives remaining
+      PAUSED: 'paused', // Player pressed ESC to pause
+    };
+
+    // ─── CANVAS SETUP ────────────────────────────────────────────────────────
+
+    const canvas = document.getElementById('gameCanvas'); // Grabs the canvas DOM element
+    const ctx = canvas.getContext('2d'); // Gets the 2D drawing context for the canvas
+    canvas.width = CANVAS_W; // Sets the internal pixel width of the canvas
+    canvas.height = CANVAS_H; // Sets the internal pixel height of the canvas
+
+    // ─── GAME STATE VARIABLES ────────────────────────────────────────────────
+
+    let gameState = STATE.TITLE; // Tracks which screen/state the game is currently in
+    let level = 1; // Current level number
+    let lives = LIVES_START; // Player's remaining lives
+    let score = 0; // Player's current score
+    let highScore = parseInt(localStorage.getItem('breakout_hs') || '0', 10); // Best score loaded from browser storage
+    let balls = []; // Array holding all active Ball objects
+    let blocks = []; // Array holding all Block objects for the current level
+    let powerups = []; // Array holding all falling Powerup objects
+    let lasers = []; // Array holding all active Laser projectile objects
+    let particles = []; // Array holding visual particle effects from block destruction
+    let paddle = null; // The single Paddle object (created on game start)
+    let keys = {}; // Map of currently held keyboard keys (key name → true/false)
+    let lastTime = 0; // Timestamp of the previous animation frame (used to compute dt)
+    let stateTimer = 0; // General-purpose timer for timed state transitions (milliseconds)
+    let slowTimer = 0; // Milliseconds remaining for the slow-ball powerup effect
+    let slowActive = false; // Whether the slow-ball powerup is currently active
+    let titleAnimTimer = 0; // Timer driving the animated title screen visuals
+    let shakeTimer = 0; // Milliseconds remaining for screen-shake effect
+    let shakeX = 0; // Current horizontal shake offset in pixels
+    let shakeY = 0; // Current vertical shake offset in pixels
+
+    // ─── ENTITY CLASSES ──────────────────────────────────────────────────────
+
+    class Ball { // Represents a single ball in the game
+      constructor(x, y, vx, vy, speed) { // Initializes ball position, velocity, and speed scalar
+        this.x = x; // Horizontal center position of the ball
+        this.y = y; // Vertical center position of the ball
+        this.vx = vx; // Horizontal velocity component (pixels per frame)
+        this.vy = vy; // Vertical velocity component (pixels per frame)
+        this.speed = speed; // Scalar speed used to renormalize velocity after deflections
+        this.radius = BALL_RADIUS; // Collision and drawing radius
+        this.onPaddle = true; // True while the ball is attached to the paddle before launch
+        this.active = true; // False means this ball should be removed from the array
+      }
+
+      update() { // Moves the ball by its velocity each frame
+        if (this.onPaddle) return; // Ball is attached to paddle; skip movement
+        this.x += this.vx; // Advance horizontal position
+        this.y += this.vy; // Advance vertical position
+      }
+
+      normalizeSpeed() { // Restores velocity magnitude to the stored speed scalar
+        const mag = Math.hypot(this.vx, this.vy); // Calculates current speed magnitude
+        if (mag === 0) return; // Avoids division by zero if ball somehow has no velocity
+        this.vx = (this.vx / mag) * this.speed; // Scales horizontal component to target speed
+        this.vy = (this.vy / mag) * this.speed; // Scales vertical component to target speed
+      }
+
+      draw() { // Renders the ball as a white circle with a subtle glow
+        ctx.save(); // Saves the current canvas drawing state
+        ctx.shadowColor = '#a0c4ff'; // Sets glow color around the ball
+        ctx.shadowBlur = 8; // Sets glow radius
+        ctx.beginPath(); // Starts a new drawing path
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2); // Draws a full circle
+        ctx.fillStyle = '#ffffff'; // Fills the ball white
+        ctx.fill(); // Paints the filled circle
+        ctx.restore(); // Restores the canvas drawing state (removes glow)
+      }
+    }
+
+    class Paddle { // Represents the player-controlled paddle
+      constructor() { // Initializes the paddle at the center of the canvas
+        this.baseWidth = PADDLE_W; // Remembers the original width to restore after wide powerup
+        this.width = PADDLE_W; // Current width (can change from powerup)
+        this.height = PADDLE_H; // Fixed height of the paddle
+        this.x = (CANVAS_W - PADDLE_W) / 2; // Starting horizontal position (centered)
+        this.y = PADDLE_Y; // Fixed vertical position near the bottom
+        this.speed = PADDLE_SPEED; // Movement speed in pixels per frame
+        this.wideTimer = 0; // Milliseconds remaining for wide-paddle effect
+        this.laserActive = false; // Whether laser powerup is currently active
+        this.laserTimer = 0; // Milliseconds remaining for laser powerup
+        this.laserCooldownTimer = 0; // Milliseconds until next laser shot is allowed
+      }
+
+      get centerX() { // Computed property returning the horizontal center of the paddle
+        return this.x + this.width / 2; // Adds half the width to the left edge position
+      }
+
+      update(dt) { // Moves the paddle based on held keys and ticks powerup timers
+        if (keys['ArrowLeft'] || keys['a'] || keys['A']) { // Checks if left movement key is held
+          this.x -= this.speed; // Moves paddle left
+        }
+        if (keys['ArrowRight'] || keys['d'] || keys['D']) { // Checks if right movement key is held
+          this.x += this.speed; // Moves paddle right
+        }
+        this.x = Math.max(0, Math.min(CANVAS_W - this.width, this.x)); // Clamps paddle within canvas bounds
+
+        if (this.wideTimer > 0) { // If wide powerup is still active
+          this.wideTimer -= dt; // Counts down the wide timer
+          if (this.wideTimer <= 0) { // If wide timer just expired
+            this.width = this.baseWidth; // Restores paddle to its original width
+          }
+        }
+
+        if (this.laserCooldownTimer > 0) { // If laser is still on cooldown
+          this.laserCooldownTimer -= dt; // Counts down the cooldown timer
+        }
+        if (this.laserTimer > 0) { // If laser powerup is still active
+          this.laserTimer -= dt; // Counts down the laser powerup duration
+          if (this.laserTimer <= 0) { // If laser powerup just expired
+            this.laserActive = false; // Deactivates the laser
+          }
+        }
+      }
+
+      activateWide() { // Applies the wide-paddle powerup
+        this.width = Math.round(this.baseWidth * 1.8); // Expands paddle to 180% of normal width
+        this.wideTimer = WIDE_DURATION_MS; // Sets the duration timer
+      }
+
+      activateLaser() { // Applies the laser powerup
+        this.laserActive = true; // Enables laser firing
+        this.laserTimer = LASER_DURATION_MS; // Sets the laser duration timer
+      }
+
+      draw() { // Renders the paddle as a rounded rectangle
+        ctx.save(); // Saves current drawing state
+        const grad = ctx.createLinearGradient(this.x, this.y, this.x, this.y + this.height); // Creates a vertical gradient for depth effect
+        grad.addColorStop(0, this.laserActive ? '#ff8a65' : '#e0e0e0'); // Top color (orange if laser, white otherwise)
+        grad.addColorStop(1, this.laserActive ? '#bf360c' : '#9e9e9e'); // Bottom color (darker shade)
+        if (this.laserActive) { // Adds glow effect when laser is active
+          ctx.shadowColor = '#ff4444'; // Red glow color
+          ctx.shadowBlur = 12; // Glow radius
+        }
+        ctx.fillStyle = grad; // Applies gradient as fill color
+        ctx.beginPath(); // Starts a new drawing path
+        ctx.roundRect(this.x, this.y, this.width, this.height, 4); // Draws rounded rectangle
+        ctx.fill(); // Fills the paddle shape
+        ctx.restore(); // Restores drawing state (removes glow)
+      }
+    }
+
+    class Block { // Represents a single destructible (or indestructible) block
+      constructor(x, y, hp, color) { // Initializes block at given grid position with hit points and color
+        this.x = x; // Left edge of the block
+        this.y = y; // Top edge of the block
+        this.width = BLOCK_W; // Block width
+        this.height = BLOCK_H; // Block height
+        this.hp = hp; // Current hit points (-1 = indestructible, 1 = normal, 2 = tough)
+        this.maxHp = hp; // Original hit points (used to compute damage visual)
+        this.color = color; // Fill color of the block
+        this.active = true; // False means the block has been destroyed and should be removed
+        this.scoreValue = hp === -1 ? 0 : hp * 10; // Points awarded when destroyed
+      }
+
+      hit() { // Called when a ball or laser contacts this block
+        if (this.hp === -1) return; // Indestructible blocks cannot be damaged
+        this.hp--; // Reduces hit points by one
+        if (this.hp <= 0) { // If all hit points are gone
+          this.active = false; // Marks block for removal
+        }
+      }
+
+      draw() { // Renders the block with a shaded rectangle and border
+        if (!this.active) return; // Skip drawing if the block has been destroyed
+        const brightness = this.maxHp === -1 ? 1 : this.hp / this.maxHp; // Compute damage level (1 = full health, approaching 0 = damaged)
+        ctx.save(); // Saves current drawing state
+        ctx.globalAlpha = 0.35 + 0.65 * brightness; // Dims damaged blocks slightly
+        ctx.fillStyle = this.color; // Sets the block fill color
+        ctx.fillRect(this.x, this.y, this.width, this.height); // Draws the block rectangle
+        ctx.globalAlpha = 1; // Restores full opacity
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)'; // Semi-transparent white for the top/left highlight
+        ctx.lineWidth = 1; // Thin border line
+        ctx.strokeRect(this.x + 0.5, this.y + 0.5, this.width - 1, this.height - 1); // Draws inset border
+        if (this.maxHp === -1) { // Adds a lock icon indicator for indestructible blocks
+          ctx.fillStyle = 'rgba(255,255,255,0.4)'; // Semi-transparent white text
+          ctx.font = '8px monospace'; // Small monospace font
+          ctx.textAlign = 'center'; // Centers text horizontally
+          ctx.fillText('■', this.x + this.width / 2, this.y + this.height / 2 + 3); // Draws a square symbol in center
+        }
+        ctx.restore(); // Restores drawing state
+      }
+    }
+
+    class Powerup { // Represents a powerup item falling from a destroyed block
+      constructor(x, y, type) { // Initializes powerup at given position with a type string
+        this.x = x; // Left edge of the powerup pill
+        this.y = y; // Top edge of the powerup pill
+        this.width = 28; // Width of the powerup pill in pixels
+        this.height = 14; // Height of the powerup pill in pixels
+        this.vy = POWERUP_SPEED; // Falling speed in pixels per frame
+        this.type = type; // Powerup type string (e.g., 'wide', 'laser')
+        this.active = true; // False means this powerup has been collected or fallen off screen
+      }
+
+      update() { // Moves the powerup downward each frame
+        this.y += this.vy; // Advances vertical position by falling speed
+        if (this.y > CANVAS_H + 20) this.active = false; // Deactivates if it falls below the canvas
+      }
+
+      draw() { // Renders the powerup as a colored pill with a label
+        const colors = { // Maps each powerup type to a distinct color
+          wide:     '#a5d6a7', // Green for wide paddle
+          multiball:'#fff176', // Yellow for multi-ball
+          slow:     '#80deea', // Cyan for slow ball
+          life:     '#f48fb1', // Pink for extra life
+          laser:    '#ff8a65', // Orange for laser
+        };
+        ctx.save(); // Saves current drawing state
+        ctx.shadowColor = colors[this.type] || '#fff'; // Sets glow color matching powerup color
+        ctx.shadowBlur = 6; // Glow radius
+        ctx.fillStyle = colors[this.type] || '#fff'; // Sets pill fill color
+        ctx.beginPath(); // Starts drawing path
+        ctx.roundRect(this.x, this.y, this.width, this.height, 7); // Draws pill shape with rounded corners
+        ctx.fill(); // Fills the pill
+        ctx.fillStyle = '#000'; // Black text for contrast
+        ctx.font = 'bold 7px monospace'; // Small bold monospace font
+        ctx.textAlign = 'center'; // Centers label text
+        ctx.shadowBlur = 0; // Disables text glow for clarity
+        const labels = { wide:'WID', multiball:'x3', slow:'SLW', life:'♥+1', laser:'LZR' }; // Short labels for each type
+        ctx.fillText(labels[this.type] || '?', this.x + this.width / 2, this.y + 10); // Draws label centered in pill
+        ctx.restore(); // Restores drawing state
+      }
+    }
+
+    class Laser { // Represents a laser projectile fired from the paddle
+      constructor(x, y) { // Initializes laser at given position
+        this.x = x; // Horizontal center of the laser beam
+        this.y = y; // Top edge of the laser beam
+        this.width = 3; // Width of the laser beam in pixels
+        this.height = 14; // Height of the laser beam in pixels
+        this.vy = -LASER_SPEED; // Upward velocity (negative = moving up the screen)
+        this.active = true; // False means this laser has hit something or left the screen
+      }
+
+      update() { // Moves the laser upward each frame
+        this.y += this.vy; // Advances vertical position upward
+        if (this.y + this.height < 0) this.active = false; // Deactivates if laser travels off the top of the screen
+      }
+
+      draw() { // Renders the laser as a thin bright red rectangle with glow
+        ctx.save(); // Saves current drawing state
+        ctx.shadowColor = '#ff4444'; // Red glow around laser
+        ctx.shadowBlur = 6; // Glow radius
+        ctx.fillStyle = '#ff6666'; // Bright red laser color
+        ctx.fillRect(this.x - this.width / 2, this.y, this.width, this.height); // Draws centered laser rectangle
+        ctx.restore(); // Restores drawing state
+      }
+    }
+
+    class Particle { // Represents a single visual particle from block destruction
+      constructor(x, y, color) { // Initializes particle at a position with a given color
+        this.x = x; // Horizontal position
+        this.y = y; // Vertical position
+        this.vx = (Math.random() - 0.5) * 5; // Random horizontal velocity
+        this.vy = (Math.random() - 0.5) * 5 - 2; // Random upward-biased vertical velocity
+        this.size = Math.random() * 4 + 2; // Random size between 2 and 6 pixels
+        this.color = color; // Particle color matching the destroyed block
+        this.alpha = 1; // Starting opacity (fades to 0 over lifetime)
+        this.life = 300 + Math.random() * 200; // Random lifetime in milliseconds
+        this.maxLife = this.life; // Stores original lifetime for alpha calculation
+        this.active = true; // False means this particle should be removed
+      }
+
+      update(dt) { // Moves and fades the particle each frame
+        this.x += this.vx; // Advances horizontal position
+        this.y += this.vy; // Advances vertical position
+        this.vy += 0.1; // Applies gravity (increases downward velocity)
+        this.life -= dt; // Counts down particle lifetime
+        this.alpha = Math.max(0, this.life / this.maxLife); // Fades out as lifetime runs out
+        if (this.life <= 0) this.active = false; // Marks particle for removal when lifetime expires
+      }
+
+      draw() { // Renders the particle as a small colored square
+        ctx.save(); // Saves drawing state
+        ctx.globalAlpha = this.alpha; // Sets current opacity
+        ctx.fillStyle = this.color; // Sets particle color
+        ctx.fillRect(this.x - this.size / 2, this.y - this.size / 2, this.size, this.size); // Draws centered square
+        ctx.restore(); // Restores drawing state
+      }
+    }
+
+    // ─── LEVEL GENERATION ────────────────────────────────────────────────────
+
+    function generateLevel(lvl) { // Creates a random block layout for the given level number
+      blocks = []; // Clears any existing blocks
+      const rows = Math.min(BLOCK_ROWS_BASE + Math.floor(lvl / 2), BLOCK_ROWS_MAX); // Increases row count each 2 levels, capped at max
+      for (let r = 0; r < rows; r++) { // Iterates over each block row
+        for (let c = 0; c < BLOCK_COLS; c++) { // Iterates over each block column
+          if (Math.random() < 0.15) continue; // 15% chance to skip this cell, creating gaps
+          const x = BLOCK_OFFSET_LEFT + c * (BLOCK_W + BLOCK_PAD); // Calculates block left edge position
+          const y = BLOCK_OFFSET_TOP + r * (BLOCK_H + BLOCK_PAD); // Calculates block top edge position
+          let hp, color; // Declare hit points and color for this block
+          const roll = Math.random(); // Random roll to determine block type
+          if (lvl >= 6 && roll < 0.10) { // 10% chance of indestructible block from level 6 onward
+            hp = -1; color = COLOR_INDESTRUCTIBLE; // Indestructible block
+          } else if (lvl >= 3 && roll < 0.30) { // 30% chance of two-hit block from level 3 onward
+            hp = 2; color = COLOR_HP2; // Tough block requiring two hits
+          } else { // Default: normal single-hit block
+            hp = 1; // One hit to destroy
+            color = NORMAL_COLORS[Math.floor(Math.random() * NORMAL_COLORS.length)]; // Random color from palette
+          }
+          blocks.push(new Block(x, y, hp, color)); // Adds the new block to the array
+        }
+      }
+    }
+
+    // ─── BALL CREATION ───────────────────────────────────────────────────────
+
+    function createBallOnPaddle(spd) { // Creates a new ball attached to the paddle
+      const speed = spd || Math.min(BALL_BASE_SPEED + (level - 1) * 0.25, 9); // Scales speed with level, capped at 9
+      const b = new Ball(paddle.centerX, paddle.y - BALL_RADIUS, 0, -speed, speed); // Creates ball centered above paddle, moving upward
+      b.onPaddle = true; // Marks ball as attached to paddle until Space is pressed
+      balls.push(b); // Adds ball to the active balls array
+    }
+
+    // ─── POWERUP COLLECTION ──────────────────────────────────────────────────
+
+    function randomPowerupType() { // Selects a random powerup type using weighted probability
+      const weights = [ // Array of powerup types and their relative weights
+        { type: 'wide',      weight: 30 }, // Wide paddle is most common
+        { type: 'slow',      weight: 25 }, // Slow ball is second most common
+        { type: 'multiball', weight: 20 }, // Multi-ball appears moderately
+        { type: 'laser',     weight: 15 }, // Laser is somewhat rare
+        { type: 'life',      weight: 10 }, // Extra life is rarest
+      ];
+      const total = weights.reduce((s, w) => s + w.weight, 0); // Sums all weights to get total
+      let roll = Math.random() * total; // Picks a random value within the total range
+      for (const entry of weights) { // Iterates through weighted entries
+        roll -= entry.weight; // Subtracts each weight from the roll
+        if (roll <= 0) return entry.type; // Returns the type when roll reaches zero
+      }
+      return 'wide'; // Fallback (should never reach here)
+    }
+
+    function collectPowerup(pu) { // Applies the effect of a collected powerup
+      pu.active = false; // Marks powerup as consumed
+      switch (pu.type) { // Dispatches based on powerup type
+        case 'wide': // Wide paddle powerup
+          paddle.activateWide(); // Expands the paddle
+          break;
+        case 'slow': // Slow ball powerup
+          if (!slowActive) { // Only applies if not already slowed
+            balls.forEach(b => { b.speed *= 0.7; b.normalizeSpeed(); }); // Slows all active balls
+          }
+          slowActive = true; // Marks slow as active
+          slowTimer = SLOW_DURATION_MS; // (Re)sets the slow duration timer
+          break;
+        case 'multiball': // Multi-ball powerup
+          const src = balls.find(b => !b.onPaddle && b.active); // Finds a ball already in flight
+          if (src) { // If there is an active flying ball to clone
+            const b1 = new Ball(src.x, src.y, src.vx + 2, src.vy, src.speed); // New ball deflected slightly right
+            b1.onPaddle = false; // Immediately in flight
+            const b2 = new Ball(src.x, src.y, src.vx - 2, src.vy, src.speed); // New ball deflected slightly left
+            b2.onPaddle = false; // Immediately in flight
+            b1.normalizeSpeed(); // Corrects speed after deflection offset
+            b2.normalizeSpeed(); // Corrects speed after deflection offset
+            balls.push(b1, b2); // Adds both new balls to the array
+          }
+          break;
+        case 'life': // Extra life powerup
+          lives++; // Increases player's life count by one
+          break;
+        case 'laser': // Laser powerup
+          paddle.activateLaser(); // Enables laser firing on the paddle
+          break;
+      }
+    }
+
+    // ─── COLLISION HELPERS ───────────────────────────────────────────────────
+
+    function rectsOverlap(a, b) { // Tests whether two axis-aligned rectangles overlap
+      return a.x < b.x + b.width && // Left edge of A is left of right edge of B
+             a.x + a.width > b.x && // Right edge of A is right of left edge of B
+             a.y < b.y + b.height && // Top edge of A is above bottom edge of B
+             a.y + a.height > b.y;   // Bottom edge of A is below top edge of B
+    }
+
+    function ballPaddleCollision(ball) { // Handles ball bouncing off the paddle with angle control
+      if (ball.y + ball.radius < paddle.y) return; // Ball is above paddle; no collision
+      if (ball.y - ball.radius > paddle.y + paddle.height) return; // Ball is below paddle; no collision
+      if (ball.x + ball.radius < paddle.x) return; // Ball is left of paddle; no collision
+      if (ball.x - ball.radius > paddle.x + paddle.width) return; // Ball is right of paddle; no collision
+      if (ball.vy < 0) return; // Ball is moving upward; skip (avoids sticking on top edge re-entry)
+
+      ball.y = paddle.y - ball.radius; // Pushes ball above paddle surface to prevent sinking
+      const hitPos = (ball.x - paddle.centerX) / (paddle.width / 2); // Normalizes hit position from -1 (left) to +1 (right)
+      const clampedHit = Math.max(-0.95, Math.min(0.95, hitPos)); // Clamps to avoid nearly-horizontal bounces
+      const angle = clampedHit * (Math.PI / 3); // Maps hit position to angle in ±60 degrees from vertical
+      ball.vx = ball.speed * Math.sin(angle); // Sets horizontal velocity based on angle
+      ball.vy = -ball.speed * Math.cos(angle); // Sets vertical velocity upward based on angle
+    }
+
+    function ballBlockCollision(ball, block) { // Tests and resolves ball-block collision; returns true if hit
+      if (!block.active) return false; // Skip inactive (destroyed) blocks
+      const bL = ball.x - ball.radius; // Ball left edge
+      const bR = ball.x + ball.radius; // Ball right edge
+      const bT = ball.y - ball.radius; // Ball top edge
+      const bB = ball.y + ball.radius; // Ball bottom edge
+
+      if (bR < block.x || bL > block.x + block.width) return false; // No horizontal overlap; no collision
+      if (bB < block.y || bT > block.y + block.height) return false; // No vertical overlap; no collision
+
+      // Compute penetration depth on each axis to determine which face was hit
+      const overlapL = bR - block.x; // How far ball penetrates from block's left side
+      const overlapR = (block.x + block.width) - bL; // How far ball penetrates from block's right side
+      const overlapT = bB - block.y; // How far ball penetrates from block's top
+      const overlapB = (block.y + block.height) - bT; // How far ball penetrates from block's bottom
+
+      const minX = Math.min(overlapL, overlapR); // Smallest horizontal penetration
+      const minY = Math.min(overlapT, overlapB); // Smallest vertical penetration
+
+      if (minX < minY) { // Horizontal face was hit (left or right side of block)
+        ball.vx *= -1; // Reverses horizontal velocity
+      } else { // Vertical face was hit (top or bottom of block)
+        ball.vy *= -1; // Reverses vertical velocity
+      }
+
+      block.hit(); // Reduces block hit points and deactivates if zero
+
+      if (!block.active) { // If this hit destroyed the block
+        score += block.scoreValue; // Adds block's point value to score
+        for (let i = 0; i < 8; i++) { // Spawns 8 particles at the block's center
+          particles.push(new Particle(block.x + block.width / 2, block.y + block.height / 2, block.color)); // Creates particle with block color
+        }
+        if (Math.random() < POWERUP_CHANCE) { // Rolls for powerup drop
+          const type = randomPowerupType(); // Selects a random powerup type
+          powerups.push(new Powerup(block.x + block.width / 2 - 14, block.y, type)); // Spawns powerup at block center
+        }
+      }
+
+      return true; // Signals that a collision occurred
+    }
+
+    function laserBlockCollision(laser, block) { // Tests and resolves laser-block collision; returns true if hit
+      if (!block.active || !laser.active) return false; // Skip if either entity is inactive
+      const laserL = laser.x - laser.width / 2; // Laser left edge
+      const laserR = laser.x + laser.width / 2; // Laser right edge
+      if (laserR < block.x || laserL > block.x + block.width) return false; // No horizontal overlap
+      if (laser.y + laser.height < block.y || laser.y > block.y + block.height) return false; // No vertical overlap
+
+      laser.active = false; // Destroys the laser on contact
+      block.hit(); // Damages the block
+
+      if (!block.active) { // If this hit destroyed the block
+        score += block.scoreValue; // Awards points
+        for (let i = 0; i < 6; i++) { // Spawns 6 particles
+          particles.push(new Particle(block.x + block.width / 2, block.y + block.height / 2, block.color)); // Creates particle
+        }
+        if (Math.random() < POWERUP_CHANCE) { // Rolls for powerup drop
+          powerups.push(new Powerup(block.x + block.width / 2 - 14, block.y, randomPowerupType())); // Spawns powerup
+        }
+      }
+
+      return true; // Signals collision occurred
+    }
+
+    // ─── GAME MANAGEMENT ─────────────────────────────────────────────────────
+
+    function startNewGame() { // Resets all game variables and starts from level 1
+      level = 1; // Resets level counter to first level
+      lives = LIVES_START; // Restores player lives to starting amount
+      score = 0; // Resets score to zero
+      balls = []; // Clears all balls
+      powerups = []; // Clears all powerups
+      lasers = []; // Clears all lasers
+      particles = []; // Clears all particles
+      slowActive = false; // Resets slow powerup state
+      slowTimer = 0; // Resets slow timer
+      paddle = new Paddle(); // Creates a fresh paddle
+      generateLevel(level); // Generates block layout for level 1
+      createBallOnPaddle(); // Places a ball on the paddle ready for launch
+      gameState = STATE.PLAYING; // Switches to gameplay state
+      stateTimer = 0; // Resets state timer
+    }
+
+    function resetAfterLifeLost() { // Prepares for play to resume after losing a life
+      balls = []; // Removes all existing balls (including any multi-balls)
+      powerups = []; // Clears all falling powerups
+      lasers = []; // Clears all laser projectiles
+      paddle.width = paddle.baseWidth; // Resets paddle to normal width
+      paddle.wideTimer = 0; // Clears wide timer
+      paddle.laserActive = false; // Disables laser
+      paddle.laserTimer = 0; // Clears laser timer
+      slowActive = false; // Clears slow effect
+      slowTimer = 0; // Clears slow timer
+      createBallOnPaddle(); // Places a fresh ball on the paddle
+      gameState = STATE.PLAYING; // Returns to playing state
+      stateTimer = 0; // Resets state timer
+    }
+
+    function loadNextLevel() { // Advances the game to the next level
+      level++; // Increments level counter
+      balls = []; // Clears all balls
+      powerups = []; // Clears all powerups
+      lasers = []; // Clears all lasers
+      particles = []; // Clears leftover particles
+      paddle.width = paddle.baseWidth; // Resets paddle width
+      paddle.wideTimer = 0; // Clears wide timer
+      paddle.laserActive = false; // Disables laser
+      paddle.laserTimer = 0; // Clears laser timer
+      slowActive = false; // Clears slow effect
+      slowTimer = 0; // Clears slow timer
+      generateLevel(level); // Generates new block layout for the new level
+      createBallOnPaddle(); // Places a fresh ball on the paddle
+      gameState = STATE.PLAYING; // Switches back to playing state
+      stateTimer = 0; // Resets state timer
+    }
+
+    // ─── UPDATE FUNCTIONS (per state) ────────────────────────────────────────
+
+    function updatePlaying(dt) { // Main gameplay update called every frame while playing
+      stateTimer += dt; // Increments general state timer
+
+      // Fire lasers when Space is held and laser powerup is active
+      if (keys[' '] && paddle.laserActive && paddle.laserCooldownTimer <= 0) { // Checks laser fire conditions
+        lasers.push(new Laser(paddle.x + paddle.width * 0.25, paddle.y - 2)); // Fires laser from left quarter of paddle
+        lasers.push(new Laser(paddle.x + paddle.width * 0.75, paddle.y - 2)); // Fires laser from right quarter of paddle
+        paddle.laserCooldownTimer = LASER_COOLDOWN_MS; // Starts cooldown before next fire
+      }
+
+      paddle.update(dt); // Moves paddle and ticks powerup timers
+
+      // Track ball to paddle center while attached
+      balls.forEach(b => { // Iterates over all balls
+        if (b.onPaddle) { // If ball is still attached
+          b.x = paddle.centerX; // Snaps ball to paddle center horizontally
+          b.y = paddle.y - b.radius; // Positions ball just above paddle surface
+        }
+      });
+
+      balls.forEach(b => b.update()); // Moves all balls by their velocity
+      powerups.forEach(p => p.update()); // Moves all powerups downward
+      lasers.forEach(l => l.update()); // Moves all lasers upward
+      particles.forEach(p => p.update(dt)); // Updates all particles (position, fade, life)
+
+      // Wall and ceiling collisions for each ball
+      balls.forEach(ball => { // Iterates over all balls
+        if (ball.onPaddle) return; // Skip attached balls
+        if (ball.x - ball.radius < 0) { // Hit left wall
+          ball.x = ball.radius; // Pushes ball back inside boundary
+          ball.vx = Math.abs(ball.vx); // Ensures ball moves rightward
+        }
+        if (ball.x + ball.radius > CANVAS_W) { // Hit right wall
+          ball.x = CANVAS_W - ball.radius; // Pushes ball back inside boundary
+          ball.vx = -Math.abs(ball.vx); // Ensures ball moves leftward
+        }
+        if (ball.y - ball.radius < 0) { // Hit ceiling
+          ball.y = ball.radius; // Pushes ball below ceiling
+          ball.vy = Math.abs(ball.vy); // Ensures ball moves downward
+        }
+        if (ball.y - ball.radius > CANVAS_H) { // Ball fell below bottom of screen
+          ball.active = false; // Marks ball as lost
+        }
+      });
+
+      // Ball vs paddle collision
+      balls.forEach(ball => { // Iterates over all balls
+        if (!ball.onPaddle) ballPaddleCollision(ball); // Only test in-flight balls
+      });
+
+      // Ball vs block collisions
+      balls.forEach(ball => { // Iterates over all balls
+        if (ball.onPaddle) return; // Skip attached balls
+        for (const block of blocks) { // Checks each block
+          if (ballBlockCollision(ball, block)) break; // Stops after first hit this frame (prevents double bounce)
+        }
+      });
+
+      // Laser vs block collisions
+      lasers.forEach(laser => { // Iterates over all active lasers
+        for (const block of blocks) { // Checks each block
+          if (laserBlockCollision(laser, block)) break; // Stops after first block hit per laser
+        }
+      });
+
+      // Powerup collection by paddle
+      powerups.forEach(pu => { // Iterates over all powerups
+        if (pu.active && rectsOverlap(pu, paddle)) collectPowerup(pu); // Collects if overlapping paddle
+      });
+
+      // Tick slow ball timer
+      if (slowActive) { // If slow powerup is currently active
+        slowTimer -= dt; // Counts down slow duration
+        if (slowTimer <= 0) { // If slow duration just expired
+          slowActive = false; // Clears slow state
+          const normalSpeed = Math.min(BALL_BASE_SPEED + (level - 1) * 0.25, 9); // Calculates the normal speed for this level
+          balls.forEach(b => { b.speed = normalSpeed; b.normalizeSpeed(); }); // Restores all balls to normal speed
+        }
+      }
+
+      // Remove all inactive entities
+      balls = balls.filter(b => b.active); // Keeps only active balls
+      powerups = powerups.filter(p => p.active); // Keeps only active powerups
+      lasers = lasers.filter(l => l.active); // Keeps only active lasers
+      particles = particles.filter(p => p.active); // Keeps only living particles
+      blocks = blocks.filter(b => b.active || b.hp === -1); // Keeps indestructible blocks and intact blocks
+
+      // Check if all balls have been lost
+      if (balls.length === 0) { // No balls remain in play
+        lives--; // Deducts a life
+        if (lives <= 0) { // All lives exhausted
+          if (score > highScore) { // New high score achieved
+            highScore = score; // Updates high score
+            localStorage.setItem('breakout_hs', highScore); // Saves high score to browser storage
+          }
+          gameState = STATE.GAME_OVER; // Transitions to game over screen
+        } else { // Lives remain
+          gameState = STATE.LIFE_LOST; // Transitions to life-lost pause screen
+          shakeTimer = 400; // Triggers screen shake
+        }
+        stateTimer = 0; // Resets state timer for transition
+        return; // Exits update early
+      }
+
+      // Check if all destructible blocks are cleared
+      const destructible = blocks.filter(b => b.hp !== -1); // Finds all non-indestructible blocks
+      if (destructible.length === 0) { // No destructible blocks remain
+        if (score > highScore) { // Check for new high score
+          highScore = score; // Updates high score
+          localStorage.setItem('breakout_hs', highScore); // Saves to browser storage
+        }
+        gameState = STATE.LEVEL_COMPLETE; // Transitions to level complete screen
+        stateTimer = 0; // Resets state timer
+      }
+    }
+
+    function updateLifeLost(dt) { // Waits for player acknowledgment after losing a life
+      stateTimer += dt; // Ticks the timer
+      if (stateTimer > 2500) { // Auto-advances after 2.5 seconds if player doesn't press Space
+        resetAfterLifeLost(); // Resets for next try
+      }
+    }
+
+    function updateLevelComplete(dt) { // Waits for player acknowledgment after clearing a level
+      stateTimer += dt; // Ticks the timer
+      if (stateTimer > 2500) { // Auto-advances after 2.5 seconds if player doesn't press Space
+        loadNextLevel(); // Loads the next level
+      }
+    }
+
+    function updateTitle(dt) { // Animates the title screen
+      titleAnimTimer += dt; // Advances the animation timer
+    }
+
+    function updateGameOver() { // Game over screen waits for input only; no timer needed
+      // Input is handled in keydown handler; nothing to update here
+    }
+
+    function updatePaused() { // Paused state waits for ESC input only; nothing to update
+      // Input is handled in keydown handler
+    }
+
+    // ─── RENDER FUNCTIONS ─────────────────────────────────────────────────────
+
+    function drawHUD() { // Renders the heads-up display overlay (score, level, lives)
+      ctx.font = '10px "Press Start 2P"'; // Retro pixel font for HUD
+      ctx.fillStyle = '#e0e0e0'; // Light gray text
+      ctx.textAlign = 'left'; // Left-align score
+      ctx.fillText('SCORE ' + String(score).padStart(6, '0'), 8, 20); // Draws zero-padded score in top-left
+      ctx.textAlign = 'center'; // Center-align level
+      ctx.fillText('LVL ' + level, CANVAS_W / 2, 20); // Draws level number at top-center
+      ctx.textAlign = 'right'; // Right-align lives
+      for (let i = 0; i < lives; i++) { // Draws one heart icon per remaining life
+        ctx.fillStyle = '#f48fb1'; // Pink heart color
+        ctx.fillText('♥', CANVAS_W - 8 - i * 22, 20); // Draws heart from right edge inward
+      }
+      if (highScore > 0) { // Only shows high score if one has been set
+        ctx.fillStyle = '#888'; // Dim gray for secondary text
+        ctx.font = '7px "Press Start 2P"'; // Smaller font for high score line
+        ctx.textAlign = 'center'; // Centers high score display
+        ctx.fillText('BEST ' + highScore, CANVAS_W / 2, 36); // Draws best score below level number
+      }
+    }
+
+    function drawBackground() { // Renders the game background
+      ctx.fillStyle = '#0a0a1a'; // Very dark blue-black background
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H); // Fills the entire canvas
+    }
+
+    function drawOverlay(alpha) { // Draws a semi-transparent dark overlay for pause/transition screens
+      ctx.fillStyle = `rgba(0,0,0,${alpha})`; // Black overlay with given opacity
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H); // Covers the entire canvas
+    }
+
+    function drawCenteredText(text, y, size, color) { // Draws centered text at a given vertical position
+      ctx.font = `${size}px "Press Start 2P"`; // Sets font size in retro style
+      ctx.fillStyle = color; // Sets text color
+      ctx.textAlign = 'center'; // Centers text horizontally
+      ctx.fillText(text, CANVAS_W / 2, y); // Draws text centered on canvas
+    }
+
+    function blinkText(text, y, size, color, period) { // Draws blinking text (visible for half of each period)
+      if (Math.floor(stateTimer / period) % 2 === 0) { // Alternates visibility based on timer
+        drawCenteredText(text, y, size, color); // Draws text when blink phase is "on"
+      }
+    }
+
+    function renderPlaying() { // Renders all game objects during active gameplay
+      ctx.save(); // Saves drawing state before shake
+      if (shakeTimer > 0) { // Applies screen shake if shake is active
+        shakeTimer -= 16; // Decrements shake timer (approximate for 60fps)
+        shakeX = (Math.random() - 0.5) * 6; // Random horizontal shake offset
+        shakeY = (Math.random() - 0.5) * 6; // Random vertical shake offset
+        ctx.translate(shakeX, shakeY); // Applies shake offset to all subsequent drawing
+      }
+      drawBackground(); // Clears and redraws background
+      particles.forEach(p => p.draw()); // Renders particle effects (behind blocks)
+      blocks.forEach(b => b.draw()); // Renders all blocks
+      powerups.forEach(p => p.draw()); // Renders falling powerups
+      lasers.forEach(l => l.draw()); // Renders laser beams
+      if (paddle) paddle.draw(); // Renders the paddle
+      balls.forEach(b => b.draw()); // Renders all balls
+      drawHUD(); // Renders HUD on top of everything
+      ctx.restore(); // Restores drawing state (removes shake translation)
+    }
+
+    function renderTitle() { // Renders the animated title screen
+      ctx.fillStyle = '#0a0a1a'; // Dark background
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H); // Fills background
+
+      // Draw animated decorative block grid in background
+      const t = titleAnimTimer / 1000; // Converts timer to seconds for sine wave calculations
+      for (let r = 0; r < 5; r++) { // Draws 5 rows of decorative blocks
+        for (let c = 0; c < BLOCK_COLS; c++) { // Draws 10 columns
+          const x = BLOCK_OFFSET_LEFT + c * (BLOCK_W + BLOCK_PAD); // Block x position
+          const y = BLOCK_OFFSET_TOP + 30 + r * (BLOCK_H + BLOCK_PAD) + Math.sin(t + c * 0.5) * 6; // y position with sine wave animation
+          ctx.globalAlpha = 0.3 + 0.2 * Math.sin(t * 2 + r + c); // Pulsing transparency
+          ctx.fillStyle = NORMAL_COLORS[(r * BLOCK_COLS + c) % NORMAL_COLORS.length]; // Cycles through color palette
+          ctx.fillRect(x, y, BLOCK_W, BLOCK_H); // Draws decorative block
+        }
+      }
+      ctx.globalAlpha = 1; // Restores full opacity
+
+      drawCenteredText('BREAKOUT', CANVAS_H * 0.55, 26, '#4fc3f7'); // Draws game title
+      drawCenteredText('', CANVAS_H * 0.65, 10, '#fff'); // Spacer line
+      blinkText('PRESS SPACE', CANVAS_H * 0.70, 10, '#fff', 600); // Blinking start prompt
+      ctx.font = '7px "Press Start 2P"'; // Small font for secondary info
+      ctx.fillStyle = '#888'; // Dim color
+      ctx.textAlign = 'center'; // Center-align
+      ctx.fillText('ARROW KEYS / A-D TO MOVE', CANVAS_W / 2, CANVAS_H * 0.78); // Control hint
+      ctx.fillText('SPACE TO LAUNCH BALL', CANVAS_W / 2, CANVAS_H * 0.83); // Launch hint
+      ctx.fillText('ESC TO PAUSE', CANVAS_W / 2, CANVAS_H * 0.88); // Pause hint
+      if (highScore > 0) { // Shows high score only if one exists
+        ctx.fillStyle = '#ffb74d'; // Gold color for high score
+        ctx.fillText('BEST: ' + highScore, CANVAS_W / 2, CANVAS_H * 0.93); // Displays high score
+      }
+    }
+
+    function renderLifeLost() { // Renders the life-lost pause screen over the frozen game
+      renderPlaying(); // Draws the game state underneath as context
+      drawOverlay(0.6); // Semi-transparent dark overlay
+      drawCenteredText('BALL LOST!', CANVAS_H / 2 - 30, 18, '#ef5350'); // Loss message in red
+      ctx.font = '8px "Press Start 2P"'; // Small font for subtext
+      ctx.fillStyle = '#aaa'; // Gray text
+      ctx.textAlign = 'center'; // Center-align
+      ctx.fillText(lives + ' ' + (lives === 1 ? 'LIFE' : 'LIVES') + ' REMAINING', CANVAS_W / 2, CANVAS_H / 2 + 10); // Shows remaining lives
+      blinkText('PRESS SPACE', CANVAS_H / 2 + 50, 9, '#fff', 500); // Blinking continue prompt
+    }
+
+    function renderLevelComplete() { // Renders the level complete screen
+      renderPlaying(); // Draws the game state underneath
+      drawOverlay(0.65); // Dark overlay
+      drawCenteredText('LEVEL ' + level, CANVAS_H / 2 - 40, 16, '#81c784'); // Level number in green
+      drawCenteredText('COMPLETE!', CANVAS_H / 2 - 10, 16, '#81c784'); // Completion text
+      ctx.font = '8px "Press Start 2P"'; // Small font
+      ctx.fillStyle = '#fff'; // White text
+      ctx.textAlign = 'center'; // Center-align
+      ctx.fillText('SCORE: ' + score, CANVAS_W / 2, CANVAS_H / 2 + 30); // Shows current score
+      blinkText('PRESS SPACE', CANVAS_H / 2 + 60, 9, '#fff', 500); // Blinking continue prompt
+    }
+
+    function renderGameOver() { // Renders the game over screen
+      renderPlaying(); // Draws game state underneath
+      drawOverlay(0.75); // Heavy dark overlay
+      drawCenteredText('GAME', CANVAS_H / 2 - 50, 24, '#ef5350'); // "GAME" in red
+      drawCenteredText('OVER', CANVAS_H / 2 - 10, 24, '#ef5350'); // "OVER" in red
+      ctx.font = '8px "Press Start 2P"'; // Small font for stats
+      ctx.fillStyle = '#ccc'; // Light gray text
+      ctx.textAlign = 'center'; // Center-align
+      ctx.fillText('SCORE: ' + score, CANVAS_W / 2, CANVAS_H / 2 + 30); // Final score
+      if (score >= highScore && score > 0) { // Shows new high score message if applicable
+        ctx.fillStyle = '#ffb74d'; // Gold text
+        ctx.fillText('NEW BEST!', CANVAS_W / 2, CANVAS_H / 2 + 50); // Congratulatory message
+      }
+      blinkText('PRESS SPACE', CANVAS_H / 2 + 80, 9, '#fff', 500); // Blinking restart prompt
+    }
+
+    function renderPaused() { // Renders the paused overlay
+      renderPlaying(); // Draws game state underneath
+      drawOverlay(0.5); // Medium dark overlay
+      drawCenteredText('PAUSED', CANVAS_H / 2 - 10, 20, '#fff'); // Paused text
+      ctx.font = '8px "Press Start 2P"'; // Small font
+      ctx.fillStyle = '#aaa'; // Gray text
+      ctx.textAlign = 'center'; // Center-align
+      ctx.fillText('ESC TO RESUME', CANVAS_W / 2, CANVAS_H / 2 + 30); // Resume hint
+    }
+
+    // ─── GAME LOOP ────────────────────────────────────────────────────────────
+
+    const STATE_HANDLERS = { // Maps each state to its update and render functions
+      [STATE.TITLE]:          { update: updateTitle,         render: renderTitle         }, // Title screen handlers
+      [STATE.PLAYING]:        { update: updatePlaying,       render: renderPlaying       }, // Gameplay handlers
+      [STATE.LIFE_LOST]:      { update: updateLifeLost,      render: renderLifeLost      }, // Life lost screen handlers
+      [STATE.LEVEL_COMPLETE]: { update: updateLevelComplete, render: renderLevelComplete }, // Level complete screen handlers
+      [STATE.GAME_OVER]:      { update: updateGameOver,      render: renderGameOver      }, // Game over screen handlers
+      [STATE.PAUSED]:         { update: updatePaused,        render: renderPaused        }, // Paused screen handlers
+    };
+
+    function gameLoop(timestamp) { // Main loop called by requestAnimationFrame every frame
+      const dt = Math.min(timestamp - lastTime, 50); // Computes delta time in milliseconds, capped at 50ms to prevent physics explosion on tab switch
+      lastTime = timestamp; // Saves current timestamp for next frame's dt calculation
+      STATE_HANDLERS[gameState].update(dt); // Calls the update function for the current game state
+      STATE_HANDLERS[gameState].render(); // Calls the render function for the current game state
+      requestAnimationFrame(gameLoop); // Schedules this function to run again on the next screen refresh
+    }
+
+    // ─── INPUT HANDLING ───────────────────────────────────────────────────────
+
+    window.addEventListener('keydown', e => { // Listens for any key being pressed
+      keys[e.key] = true; // Records the key as held
+
+      if (e.key === ' ') { // Space bar was pressed
+        e.preventDefault(); // Prevents the page from scrolling on space press
+        switch (gameState) { // Dispatches based on current game state
+          case STATE.TITLE: // On title screen
+            startNewGame(); // Begins a new game
+            break;
+          case STATE.PLAYING: // During gameplay
+            if (paddle && paddle.laserActive) { // If laser powerup is active, Space fires lasers
+              // Laser firing is handled in updatePlaying, nothing to do here
+            } else { // Otherwise Space launches the ball from the paddle
+              balls.forEach(b => { // Iterates all balls
+                if (b.onPaddle) { // Only launches balls still attached to paddle
+                  b.onPaddle = false; // Detaches ball from paddle
+                  b.vx = 0; // Starts with no horizontal velocity
+                  b.vy = -b.speed; // Launches ball straight upward at full speed
+                }
+              });
+            }
+            break;
+          case STATE.LIFE_LOST: // On life-lost pause screen
+            resetAfterLifeLost(); // Resumes play immediately without waiting for timer
+            break;
+          case STATE.LEVEL_COMPLETE: // On level complete screen
+            loadNextLevel(); // Advances to next level immediately
+            break;
+          case STATE.GAME_OVER: // On game over screen
+            gameState = STATE.TITLE; // Returns to title screen
+            stateTimer = 0; // Resets state timer
+            break;
+        }
+      }
+
+      if (e.key === 'Escape') { // Escape key was pressed
+        if (gameState === STATE.PLAYING) { // If currently playing
+          gameState = STATE.PAUSED; // Pauses the game
+        } else if (gameState === STATE.PAUSED) { // If currently paused
+          gameState = STATE.PLAYING; // Resumes the game
+          stateTimer = 0; // Resets state timer to avoid timer-based auto-transitions misfiring
+        }
+      }
+    });
+
+    window.addEventListener('keyup', e => { // Listens for any key being released
+      keys[e.key] = false; // Marks the key as no longer held
+    });
+
+    // Mouse control for paddle (optional convenience)
+    canvas.addEventListener('mousemove', e => { // Listens for mouse movement over the canvas
+      if (gameState !== STATE.PLAYING || !paddle) return; // Only active during gameplay
+      const rect = canvas.getBoundingClientRect(); // Gets canvas position and size on screen
+      const scaleX = CANVAS_W / rect.width; // Calculates pixel-to-canvas coordinate scale
+      const mouseX = (e.clientX - rect.left) * scaleX; // Converts screen mouse X to canvas coordinates
+      paddle.x = Math.max(0, Math.min(CANVAS_W - paddle.width, mouseX - paddle.width / 2)); // Centers paddle on mouse, clamped to bounds
+    });
+
+    // ─── RESPONSIVE SCALING ───────────────────────────────────────────────────
+
+    function scaleCanvas() { // Scales the canvas element to fit the browser window while preserving aspect ratio
+      const scaleX = window.innerWidth / CANVAS_W; // How much to scale to fit width
+      const scaleY = window.innerHeight / CANVAS_H; // How much to scale to fit height
+      const scale = Math.min(scaleX, scaleY); // Uses the smaller scale to ensure the canvas fits entirely
+      canvas.style.transform = `scale(${scale})`; // Applies CSS scale transform
+      canvas.style.transformOrigin = 'top left'; // Scales from top-left corner
+      canvas.style.position = 'absolute'; // Allows manual positioning
+      canvas.style.left = Math.floor((window.innerWidth - CANVAS_W * scale) / 2) + 'px'; // Centers canvas horizontally
+      canvas.style.top = Math.floor((window.innerHeight - CANVAS_H * scale) / 2) + 'px'; // Centers canvas vertically
+    }
+
+    window.addEventListener('resize', scaleCanvas); // Re-scales canvas whenever the window is resized
+
+    // ─── STARTUP ─────────────────────────────────────────────────────────────
+
+    scaleCanvas(); // Scales canvas to fit the initial window size on load
+    requestAnimationFrame(gameLoop); // Starts the game loop on the first animation frame
+  </script>
+</body>
+</html>
