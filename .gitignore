@@ -1,0 +1,13 @@
+# Binaries
+*.exe
+*.dll
+*.o
+*.out
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Selenium screenshots
+Automation/*.png

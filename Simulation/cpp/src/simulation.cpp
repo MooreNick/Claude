@@ -504,7 +504,7 @@ int main(int /*argc*/, char* /*argv*/[]) {
 
     SDL_Renderer* renderer = SDL_CreateRenderer(     // create the accelerated renderer
         window, -1,                                  // -1: use the first available driver
-        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);  // GPU-accelerated, vsync on
+        SDL_RENDERER_ACCELERATED);                               // GPU-accelerated, no vsync (manual frame cap below)
     if (!renderer) {                                 // guard against renderer creation failure
         SDL_Log("CreateRenderer failed: %s", SDL_GetError());
         SDL_DestroyWindow(window); TTF_Quit(); SDL_Quit(); return 1;
